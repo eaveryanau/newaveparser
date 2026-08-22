@@ -19,7 +19,7 @@ class AvByClient implements ApiClientInterface
             'sorting' => 4
         ];
 
-        $response = $this->http->post('/offer-types/cars/filters/main/apply', [
+        $response = $this->http->request('POST', '/offer-types/cars/filters/main/apply', [
             'json' => $payload,
             'headers' => [
                 'Accept' => '*/*',

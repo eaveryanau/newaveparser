@@ -65,7 +65,7 @@ class TelegramSender
 
         try {
             if ($item->imageUrl && filter_var($item->imageUrl, FILTER_VALIDATE_URL) !== false) {
-                $response = $this->telegramHttp->post("/bot{$this->token}/sendPhoto", [
+                $response = $this->telegramHttp->request('POST', "/bot{$this->token}/sendPhoto", [
                     'form_params' => [
                         'chat_id' => $this->chatId,
                         'photo' => $item->imageUrl,
@@ -75,7 +75,7 @@ class TelegramSender
                     ]
                 ]);
             } else {
-                $response = $this->telegramHttp->post("/bot{$this->token}/sendMessage", [
+                $response = $this->telegramHttp->request('POST', "/bot{$this->token}/sendMessage", [
                     'form_params' => [
                         'chat_id' => $this->chatId,
                         'text' => $text,

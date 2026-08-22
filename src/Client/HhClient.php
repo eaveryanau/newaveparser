@@ -6,23 +6,17 @@ use GuzzleHttp\ClientInterface;
 
 class HhClient implements ApiClientInterface
 {
-    private ClientInterface $http;
-    private string $query;
-    private string $areas;
-
-    public function __construct(ClientInterface $http, string $query = 'Frontend', string $areas = '16')
-    {
-        $this->http = $http;
-        $this->query = $query;
-        $this->areas = $areas;
-    }
+    public function __construct(
+        private ClientInterface $http,
+        private string $query = 'Frontend',
+    ) {}
 
     public function fetchPage(int $page): array
     {
         // В HH.ru пагинация начинается с 0
         $pageParam = $page - 1;
 
-        $response = $this->http->get('/shards/vacancy/search?area=1002&area=16', [
+        $response = $this->http->request('GET', '/shards/vacancy/search?area=1002&area=16', [
             'query' => [
                 'ored_clusters' => 'true',
                 'text' => $this->query,

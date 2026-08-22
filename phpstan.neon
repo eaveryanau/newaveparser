@@ -2,3 +2,5 @@ parameters:
     level: 5
     paths:
         - src/
+    ignoreErrors:
+        - '#Property App\\Client\\AnotherClient::\$http is never read, only written#'
