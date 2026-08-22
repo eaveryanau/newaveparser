@@ -9,6 +9,7 @@ class HhClient implements ApiClientInterface
     public function __construct(
         private ClientInterface $http,
         private string $query = 'Frontend',
+        private string $areas = '16',
     ) {}
 
     public function fetchPage(int $page): array
@@ -23,8 +24,7 @@ class HhClient implements ApiClientInterface
                 'search_field' => ['name', 'company_name', 'description'],
                 'enable_snippets' => 'false',
                 'page' => $pageParam,
-                // Добавляем area, если они заданы
-//                'area' => $this->areas,
+                'area' => explode(',', $this->areas),
                 // Можно добавить другие параметры, если нужно
             ],
             'headers' => [
