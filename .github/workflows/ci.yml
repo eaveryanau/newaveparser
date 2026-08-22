@@ -28,3 +28,9 @@ jobs:
 
       - name: Check config is valid
         run: php bin/console debug:config framework
+
+      - name: Run PHPStan
+        run: vendor/bin/phpstan analyse --level=5 src/
+
+      - name: Run tests
+        run: vendor/bin/phpunit
