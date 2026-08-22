@@ -21,3 +21,106 @@ services:
 
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones
+  # Явные определения для клиентов
+  # HTTP-клиенты
+    GuzzleHttp\ClientInterface $avbyHttp:
+      class: GuzzleHttp\Client
+      arguments:
+        $config:
+          base_uri: 'https://web-api.av.by'
+          timeout: 30
+
+    GuzzleHttp\ClientInterface $anotherHttp:
+      class: GuzzleHttp\Client
+      arguments:
+        $config:
+          base_uri: 'https://api.another-site.com'
+          timeout: 30
+
+  # Клиенты API с тегами
+    App\Client\AvByClient:
+      arguments:
+        $http: '@GuzzleHttp\ClientInterface $avbyHttp'
+      tags:
+        - { name: 'app.api_client', source: 'avby' }
+
+    App\Client\AnotherClient:
+      arguments:
+        $http: '@GuzzleHttp\ClientInterface $anotherHttp'
+      tags:
+        - { name: 'app.api_client', source: 'another' }
+
+    GuzzleHttp\ClientInterface $telegramHttp:
+      class: GuzzleHttp\Client
+      arguments:
+        $config:
+          base_uri: 'https://api.telegram.org'
+
+  # --- Отправители Telegram по источникам ---
+    telegram.sender.avby:
+      class: App\Telegram\TelegramSender
+      arguments:
+        $telegramHttp: '@GuzzleHttp\ClientInterface $telegramHttp'
+        $token: '%env(TELEGRAM_TOKEN)%'
+        $chatId: '%env(TELEGRAM_CHAT_ID_AV)%'
+        $logger: '@logger'
+        $source: 'avby'
+      tags:
+        - { name: 'app.telegram_sender', source: 'avby' }
+
+    telegram.sender.hh:
+      class: App\Telegram\TelegramSender
+      arguments:
+        $telegramHttp: '@GuzzleHttp\ClientInterface $telegramHttp'
+        $token: '%env(TELEGRAM_TOKEN)%'
+        $chatId: '%env(TELEGRAM_CHAT_ID_HH)%'
+        $logger: '@logger'
+        $source: 'hh'
+      tags:
+        - { name: 'app.telegram_sender', source: 'hh' }
+
+  # --- Нормализаторы с тегами ---
+    App\Normalizer\AvByItemNormalizer:
+      tags:
+        - { name: 'app.item_normalizer' }
+
+    App\Normalizer\AnotherItemNormalizer:
+      tags:
+        - { name: 'app.item_normalizer' }
+
+  # --- Подключение к БД ---
+    App\Service\Database:
+      arguments:
+        $databaseUrl: '%env(DATABASE_URL)%'
+
+  # --- HTTP-клиент для HH.ru ---
+    GuzzleHttp\ClientInterface $hhHttp:
+      class: GuzzleHttp\Client
+      arguments:
+        $config:
+          base_uri: 'https://hh.ru'
+          timeout: 30
+
+  # --- Клиент HH.ru с тегом ---
+    App\Client\HhClient:
+      arguments:
+        $http: '@GuzzleHttp\ClientInterface $hhHttp'
+        $query: '%env(HH_QUERY)%'
+        $areas: '%env(HH_AREAS)%'
+      tags:
+        - { name: 'app.api_client', source: 'hh' }
+
+  # --- Нормализатор HH.ru с тегом ---
+    App\Normalizer\HhItemNormalizer:
+      tags:
+        - { name: 'app.item_normalizer' }
+
+  # Команда – внедряем все клиенты с тегом
+    App\Command\ParseCommand:
+      arguments:
+        $apiClients: !tagged_iterator app.api_client
+        $itemNormalizers: !tagged_iterator app.item_normalizer
+        $telegramSenders: !tagged_iterator app.telegram_sender
+        $saver: '@App\Service\ItemSaver'
+        $sleepInterval: '%env(int:SLEEP_INTERVAL)%'
+        $logger: '@logger'
