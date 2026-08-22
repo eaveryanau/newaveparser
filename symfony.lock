@@ -3,7 +3,7 @@
         "version": "2.2.9"
     },
     "phpunit/phpunit": {
-        "version": "13.3",
+        "version": "11.5",
         "recipe": {
             "repo": "github.com/symfony/recipes",
             "branch": "main",
@@ -12,7 +12,7 @@
         },
         "files": [
             ".env.test",
-            "phpunit.dist.xml",
+            "phpunit.xml.dist",
             "tests/bootstrap.php",
             "bin/phpunit"
         ]

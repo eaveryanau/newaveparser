@@ -69,6 +69,6 @@
     "require-dev": {
         "phpstan/extension-installer": "^1.4",
         "phpstan/phpstan": "^2.2",
-        "phpunit/phpunit": "^13.3"
+        "phpunit/phpunit": "^11.0"
     }
 }
