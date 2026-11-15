@@ -12,7 +12,8 @@
                 {"name": "generation_with_years", "value": "G05 (2018-)"},
                 {"name": "engine_capacity", "value": "3.0"},
                 {"name": "engine_type", "value": "Дизель"},
-                {"name": "transmission_type", "value": "Автомат"}
+                {"name": "transmission_type", "value": "Автомат"},
+                {"name": "mileage_km", "value": 580000}
             ],
             "price": {"usd": {"amount": 35000}},
             "publicUrl": "https://cars.av.by/bmw-x5/12345",

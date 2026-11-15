@@ -34,6 +34,7 @@ class AvByItemNormalizerTest extends TestCase
                 ['name' => 'engine_capacity', 'value' => '3.0'],
                 ['name' => 'engine_type', 'value' => 'Дизель'],
                 ['name' => 'transmission_type', 'value' => 'Автомат'],
+                ['name' => 'mileage_km', 'value' => 580000],
             ],
             'price' => ['usd' => ['amount' => 35000]],
             'publicUrl' => 'https://cars.av.by/bmw-x5/12345',
@@ -59,6 +60,7 @@ class AvByItemNormalizerTest extends TestCase
         self::assertSame('3.0', $item->engineCapacity);
         self::assertSame('Дизель', $item->engineType);
         self::assertSame('Автомат', $item->transmissionType);
+        self::assertSame(580000, $item->mileage);
     }
 
     public function testNormalizeMinimalData(): void
@@ -83,5 +85,6 @@ class AvByItemNormalizerTest extends TestCase
         self::assertNull($item->imageUrl);
         self::assertNull($item->generation);
         self::assertNull($item->engineCapacity);
+        self::assertNull($item->mileage);
     }
 }

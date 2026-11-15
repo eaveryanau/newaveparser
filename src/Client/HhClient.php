@@ -17,7 +17,7 @@ class HhClient implements ApiClientInterface
         // В HH.ru пагинация начинается с 0
         $pageParam = $page - 1;
 
-        $response = $this->http->request('GET', '/shards/vacancy/search?area=1002&area=16', [
+        $response = $this->http->request('GET', '/shards/vacancy/search', [
             'query' => [
                 'ored_clusters' => 'true',
                 'text' => $this->query,

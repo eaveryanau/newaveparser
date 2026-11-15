@@ -20,6 +20,7 @@ class Item
     public ?string $engineCapacity = null;
     public ?string $engineType = null;
     public ?string $transmissionType = null;
+    public ?int $mileage = null;
     public ?string $brand = null;
     public ?string $model = null;
 }

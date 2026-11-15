@@ -25,3 +25,7 @@ jobs:
 
       - name: Validate, smoke test, static analysis and tests
         run: composer check
+
+      - name: Audit dependencies
+        run: composer audit
+        continue-on-error: true

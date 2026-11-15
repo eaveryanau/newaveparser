@@ -39,8 +39,9 @@ class ItemSaver
             $oldPrice = null;
 
             if ($existing) {
-                $oldPrice = (float)$existing['price'];
-                if (abs($oldPrice - $item->price) > 0.001) { // сравниваем с погрешностью
+                $oldPrice = (float) $existing['price'];
+                $priceDiff = abs($oldPrice - $item->price);
+                if ($priceDiff > $this->priceChangeThreshold($item->source)) {
                     $isPriceChanged = true;
                 }
 
@@ -63,6 +64,8 @@ class ItemSaver
 
                 if ($isPriceChanged) {
                     $this->logger->info("Цена изменена для {$item->id}: {$oldPrice} -> {$item->price}");
+                } elseif ($priceDiff > 0.001) {
+                    $this->logger->debug("Обновлены данные ID {$item->id} (изменение цены ниже порога)");
                 } else {
                     $this->logger->debug("Обновлены данные ID {$item->id} (цена не изменилась)");
                 }
@@ -102,5 +105,10 @@ class ItemSaver
                 'oldPrice' => null,
             ];
         }
+    }
+
+    private function priceChangeThreshold(string $source): float
+    {
+        return $source === 'avby' ? 100.0 : 0.001;
     }
 }

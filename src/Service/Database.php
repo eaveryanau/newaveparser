@@ -14,7 +14,9 @@ class Database
         }
         $this->pdo = new \PDO('sqlite:' . $path);
         $this->pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $this->pdo->exec('PRAGMA busy_timeout = 5000');
         $this->initTable();
+        $this->initOutbox();
     }
 
     private function initTable(): void
@@ -32,6 +34,27 @@ class Database
                 created_at DATETIME NOT NULL,
                 PRIMARY KEY (id, source)
             )
+        ');
+    }
+
+    private function initOutbox(): void
+    {
+        $this->pdo->exec('
+            CREATE TABLE IF NOT EXISTS telegram_outbox (
+                id VARCHAR(64) NOT NULL,
+                source VARCHAR(64) NOT NULL,
+                payload TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at DATETIME NOT NULL,
+                last_error TEXT,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NOT NULL,
+                PRIMARY KEY (id, source)
+            )
+        ');
+        $this->pdo->exec('
+            CREATE INDEX IF NOT EXISTS idx_telegram_outbox_due
+            ON telegram_outbox (source, next_attempt_at)
         ');
     }
 

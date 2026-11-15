@@ -20,6 +20,7 @@ class AvByItemNormalizer implements ItemNormalizerInterface
         $item->engineCapacity = null;
         $item->engineType = null;
         $item->transmissionType = null;
+        $item->mileage = null;
 
         foreach ($raw['properties'] as $prop) {
             switch ($prop['name']) {
@@ -31,6 +32,9 @@ class AvByItemNormalizer implements ItemNormalizerInterface
                 case 'engine_capacity': $item->engineCapacity = $prop['value']; break;
                 case 'engine_type': $item->engineType = $prop['value']; break;
                 case 'transmission_type': $item->transmissionType = $prop['value']; break;
+                case 'mileage_km':
+                    $item->mileage = is_numeric($prop['value']) ? (int) $prop['value'] : null;
+                    break;
             }
         }
 

@@ -13,16 +13,18 @@
 | Парсинг av.by (автомобили) | ✅ Работает |
 | Парсинг hh.ru (вакансии) | ✅ Работает |
 | Заглушка для нового источника (`another`) | ✅ Шаблон (sender не настроен) |
-| Сохранение в SQLite | ✅ PDO, автосоздание таблицы |
+| Сохранение в SQLite | ✅ PDO, автосоздание таблиц |
 | Выявление новых объявлений | ✅ По составному ключу `(id, source)` |
-| Выявление изменения цены | ✅ С погрешностью 0.001 |
+| Выявление изменения цены | ✅ av.by — разница > 100 USD, остальные — > 0.001 |
+| Пробег av.by в уведомлении | ✅ Строка характеристик |
 | Уведомления в Telegram с фото | ✅ sendPhoto / sendMessage HTML |
 | Разные чаты для разных источников | ✅ Каждый источник — свой chat_id |
 | CLI-параметры: страницы, лимит, источник | ✅ |
 | Принудительная отправка (`--force`) | ✅ |
 | Отключение Telegram (`--no-tg`) | ✅ |
 | Логирование в консоль и файл | ✅ Monolog |
-| Обработка 429 Too Many Requests | ✅ sleep между отправками, README |
+| Очередь повторной отправки Telegram | ✅ SQLite, backoff, до 10 попыток |
+| Обработка 429 Too Many Requests | ✅ `retry_after` + backoff |
 
 ---
 
@@ -143,10 +145,10 @@ php bin/console parse [options]
 | `--limit` | `-l` | `0` | Лимит объявлений (`0` — без лимита) |
 | `--source` | `-s` | `avby` | Источник: `avby`, `hh`, `another` |
 | `--force` | `-f` | — | Отправить все объявления, игнорируя проверку на новизну |
-| `--no-tg` | — | — | Только сохранение в БД, без отправки в Telegram |
+| `--no-tg` | — | — | Только сохранение в БД: без отправки и без разбора очереди |
 
 `another` — это заготовка: для него зарегистрированы клиент и нормализатор, но нет
-`telegram.sender.another`, поэтому `--source=another` завершится ошибкой «Нет отправителя».
+`telegram.sender.another`. С `--no-tg` источник работает, без него — ошибка «Нет отправителя».
 
 ### Примеры
 
@@ -208,6 +210,36 @@ DATABASE_URL=sqlite:/tmp/newaveparser-check.db php bin/console parse --source=av
 | `created_at` | DATETIME | Дата первого сохранения |
 
 **Первичный ключ**: `(id, source)` — гарантирует уникальность записи по источнику.
+
+### Таблица `telegram_outbox`
+
+Очередь неудачных отправок. Создаётся автоматически вместе с `items`.
+
+| Колонка | Тип | Описание |
+|---|---|---|
+| `id`, `source` | VARCHAR(64) | Составной ключ объявления |
+| `payload` | TEXT | Снимок `Item` в JSON (включая поля av.by) |
+| `attempts` | INTEGER | Число неудачных попыток |
+| `next_attempt_at` | DATETIME | Когда пробовать снова |
+| `last_error` | TEXT | Последняя ошибка Telegram |
+| `created_at`, `updated_at` | DATETIME | Служебные метки |
+
+Backoff: 60 с, 5 мин, 15 мин, 1 ч, 6 ч, 24 ч (дальше — 24 ч), максимум 10 попыток.
+Если Telegram вернул `retry_after`, задержка берётся не меньше него.
+
+```sql
+-- Что ждёт отправки
+SELECT id, source, attempts, next_attempt_at, last_error
+FROM telegram_outbox ORDER BY next_attempt_at;
+
+-- Ручная очистка очереди
+DELETE FROM telegram_outbox;
+```
+
+Очередь разбирается в начале каждого запуска (до 10 записей), только без `--no-tg`.
+Доставка at-least-once: при потере ответа Telegram возможен дубль. Постоянные 4xx
+(например, «chat not found») в очередь не попадают — только временные ошибки.
+Параллельные запуски одного источника блокируются через `flock` (`var/parse-<source>.lock`).
 
 ---
 
@@ -347,9 +379,13 @@ php bin/console parse --source=realtby --pages=3
     │   └── AnotherItemNormalizer.php   # Заглушка
     ├── Service/
     │   ├── Database.php                # PDO-обёртка над SQLite
-    │   └── ItemSaver.php               # Сохранение с детектированием new/price-change
+    │   ├── ItemSaver.php               # Сохранение с детектированием new/price-change
+    │   └── RunLock.php                 # flock против параллельных запусков
     ├── Telegram/
-    │   └── TelegramSender.php          # HTML + фото в Telegram
+    │   ├── TelegramSender.php          # HTML + фото в Telegram
+    │   ├── TelegramOutbox.php          # Очередь повторной отправки
+    │   ├── SendResult.php              # success / retryable / permanent
+    │   └── OutboxEntry.php             # Элемент очереди
     └── Kernel.php
 ```
 
@@ -365,7 +401,6 @@ php bin/console parse --source=realtby --pages=3
 - **История цен**: хранить не только последнюю цену, а всю историю изменений
 - **Экспорт**: CSV / JSON / XLSX из собранных данных
 - **Фильтры**: CLI-опции для цены, категории, региона
-- **Retry с exponential backoff**: вместо `sleep()` при 429
 - **Docker**: для воспроизводимого окружения
 - **Static analysis**: PHPStan / Psalm
 

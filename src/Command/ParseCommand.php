@@ -3,7 +3,9 @@
 namespace App\Command;
 
 use App\Service\ItemSaver;
-use App\Telegram\TelegramSender;
+use App\Service\RunLockInterface;
+use App\Telegram\TelegramOutbox;
+use App\Telegram\TelegramSenderInterface;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -11,33 +13,19 @@ use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 use Psr\Log\LoggerInterface;
 
-/**
- * Команда для парсинга объявлений из указанного источника.
- */
 class ParseCommand extends Command
 {
-    private iterable $apiClients;
-    private iterable $itemNormalizers;
-    private iterable $telegramSenders;
-    private ItemSaver $saver;
-    private int $sleepInterval;
-    private LoggerInterface $logger;
-
     public function __construct(
-        iterable $apiClients,
-        iterable $itemNormalizers,
-        iterable $telegramSenders,
-        ItemSaver $saver,
-        int $sleepInterval,
-        LoggerInterface $logger
+        private iterable $apiClients,
+        private iterable $itemNormalizers,
+        private iterable $telegramSenders,
+        private ItemSaver $saver,
+        private TelegramOutbox $outbox,
+        private RunLockInterface $runLock,
+        private int $sleepInterval,
+        private LoggerInterface $logger,
     ) {
         parent::__construct();
-        $this->apiClients = $apiClients;
-        $this->itemNormalizers = $itemNormalizers;
-        $this->telegramSenders = $telegramSenders;
-        $this->saver = $saver;
-        $this->sleepInterval = $sleepInterval;
-        $this->logger = $logger;
     }
 
     protected function configure(): void
@@ -54,51 +42,97 @@ class ParseCommand extends Command
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io = new SymfonyStyle($input, $output);
-        $pages = (int)$input->getOption('pages');
-        $limit = (int)$input->getOption('limit');
-        $source = $input->getOption('source');
+        $source = (string) $input->getOption('source');
 
-        // 1. Выбираем клиент
+        if (!$this->runLock->acquire($source)) {
+            $io->warning("Парсинг источника $source уже выполняется, запуск пропущен");
+            $this->logger->info('Запуск пропущен: уже выполняется', ['source' => $source]);
+
+            return Command::SUCCESS;
+        }
+
+        try {
+            return $this->parse($input, $io, $source);
+        } finally {
+            $this->runLock->release();
+        }
+    }
+
+    private function parse(InputInterface $input, SymfonyStyle $io, string $source): int
+    {
+        $pages = (int) $input->getOption('pages');
+        $limit = (int) $input->getOption('limit');
+        $force = (bool) $input->getOption('force');
+        $noTg = (bool) $input->getOption('no-tg');
+
         $client = null;
-        foreach ($this->apiClients as $c) {
-            if ($c->getSource() === $source) {
-                $client = $c;
+        foreach ($this->apiClients as $candidate) {
+            if ($candidate->getSource() === $source) {
+                $client = $candidate;
                 break;
             }
         }
-        if (!$client) {
+        if ($client === null) {
             $io->error("Неизвестный источник: $source. Доступные: avby, hh, another");
+
             return Command::FAILURE;
         }
 
-        // 2. Выбираем нормализатор
         $normalizer = null;
-        foreach ($this->itemNormalizers as $n) {
-            if ($n->supports($source)) {
-                $normalizer = $n;
+        foreach ($this->itemNormalizers as $candidate) {
+            if ($candidate->supports($source)) {
+                $normalizer = $candidate;
                 break;
             }
         }
-        if (!$normalizer) {
+        if ($normalizer === null) {
             $io->error("Нет нормализатора для источника: $source");
+
             return Command::FAILURE;
+        }
+
+        $sender = null;
+        if (!$noTg) {
+            foreach ($this->telegramSenders as $candidate) {
+                if ($candidate instanceof TelegramSenderInterface && $candidate->getSource() === $source) {
+                    $sender = $candidate;
+                    break;
+                }
+            }
+            if ($sender === null) {
+                $io->error("Нет отправителя для источника: $source");
+
+                return Command::FAILURE;
+            }
         }
 
         $io->title("Парсинг источника: $source");
-        $this->logger->info("Запуск парсинга", [
+        $this->logger->info('Запуск парсинга', [
             'source' => $source,
             'pages' => $pages,
             'limit' => $limit,
         ]);
+
+        if ($noTg) {
+            $io->writeln('Отправка в Telegram отключена (--no-tg). Данные будут только сохранены в БД.');
+            $this->logger->info('Отправка в Telegram отключена через --no-tg');
+        }
 
         $processed = 0;
         $sent = 0;
         $newCount = 0;
         $changedCount = 0;
         $skippedCount = 0;
+        $queuedCount = 0;
+        $retriedCount = 0;
+        $sentKeys = [];
+
+        if (!$noTg) {
+            $retriedCount = $this->drainOutbox($source, $sender, $io, $sentKeys);
+            $sent += $retriedCount;
+        }
 
         $page = 1;
-        // Если pages == 0, то мы не знаем общее количество страниц – получим из первого запроса
         $totalPages = ($pages > 0) ? $pages : null;
 
         do {
@@ -106,119 +140,167 @@ class ParseCommand extends Command
             try {
                 $data = $client->fetchPage($page);
                 if ($totalPages === null) {
-                    $totalPages = $data['pageCount']; // устанавливаем общее количество страниц
+                    $totalPages = $data['pageCount'];
                 }
                 $io->text("Найдено {$data['count']} объявлений, всего страниц {$data['pageCount']}");
-                $this->logger->debug("Получены данные", ['page' => $page, 'count' => $data['count']]);
-
-                $sender = null;
-                foreach ($this->telegramSenders as $s) {
-                    if ($s->getSource() === $source) {
-                        $sender = $s;
-                        break;
-                    }
-                }
-                if (!$sender) {
-                    $io->error("Нет отправителя для источника: $source");
-                    return Command::FAILURE;
-                }
-
-                $noTg = $input->getOption('no-tg');
-                if ($noTg) {
-                    $io->writeln("⚠️ Отправка в Telegram отключена (--no-telegram). Данные будут только сохранены в БД.");
-                    $this->logger->info("Отправка в Telegram отключена через --no-telegram");
-                }
+                $this->logger->debug('Получены данные', ['page' => $page, 'count' => $data['count']]);
 
                 foreach ($data['adverts'] as $raw) {
                     $item = $normalizer->normalize($raw);
                     $processed++;
 
                     $io->writeln("→ Обработка {$item->title} (ID {$item->id})");
-                    $this->logger->debug("Обработка элемента", ['id' => $item->id, 'title' => $item->title]);
+                    $this->logger->debug('Обработка элемента', ['id' => $item->id, 'title' => $item->title]);
 
                     $result = $this->saver->save($item);
                     if (!$result['saved']) {
                         $io->error("Не удалось сохранить ID {$item->id}");
-                        $this->logger->error("Ошибка сохранения", ['id' => $item->id]);
+                        $this->logger->error('Ошибка сохранения', ['id' => $item->id]);
                         continue;
                     }
 
-                    $force = $input->getOption('force');
+                    $key = $this->itemKey($item->source, $item->id);
+                    $shouldNotify = $force || $result['isNew'] || $result['isPriceChanged'];
 
-                    if ($force || $result['isNew'] || $result['isPriceChanged']) {
+                    if (!$shouldNotify) {
+                        $io->writeln('  ⏩ Без изменений (пропущено)');
+                        $skippedCount++;
+                    } elseif (isset($sentKeys[$key])) {
+                        $this->outbox->remove($item->id, $item->source);
+                        $io->writeln('  ⏭️ Уже отправлено из очереди в этом запуске');
+                    } elseif ($noTg) {
+                        $io->writeln('  ⏭️ (отправка пропущена из-за --no-tg)');
+                    } else {
                         $message = $result['isNew']
-                            ? "🆕 Новое объявление"
+                            ? '🆕 Новое объявление'
                             : "💰 Изменение цены: {$result['oldPrice']} -> {$item->price} {$item->currency}";
                         $io->writeln("  → $message");
 
-                        if ($noTg) {
-                            // Отправка отключена – просто увеличиваем счетчик
-                            $io->writeln(
-                                "  ⏭️ (отправка пропущена из-за --no-tg)"
-                            );
-                            // Всё равно считаем как "отправлено" для статистики? Или новый счетчик.
-                            // Я создам отдельный счетчик $telegramDisabledCount
-                        }
-                        else {
-                            if ($sender->sendItem($item)) {
-                                $sent++;
-                                if ($result['isNew']) {
-                                    $newCount++;
-                                } else {
-                                    $changedCount++;
-                                }
-                            } else {
-                                $io->error(
-                                    "Не удалось отправить ID {$item->id} в Telegram"
-                                );
-                                $this->logger->error(
-                                    "Ошибка отправки в Telegram",
-                                    ['id' => $item->id]
-                                );
-                            }
-                            // Задержка после отправки, чтобы избежать флуда
-                            sleep($this->sleepInterval);
-                        }
+                        $sendResult = $sender->sendItem($item);
+                        sleep($this->sleepInterval);
 
-                    } else {
-                        $io->writeln("  ⏩ Без изменений (пропущено)");
-                        $skippedCount++;
+                        if ($sendResult->success) {
+                            $sent++;
+                            $this->outbox->remove($item->id, $item->source);
+                            if ($result['isNew']) {
+                                $newCount++;
+                            } else {
+                                $changedCount++;
+                            }
+                        } elseif ($sendResult->retryable) {
+                            $this->outbox->recordFailure(
+                                $item,
+                                $sendResult->error ?? 'Неизвестная ошибка',
+                                $sendResult->retryAfter
+                            );
+                            $queuedCount++;
+                            $io->error("Не удалось отправить ID {$item->id}, добавлено в очередь");
+                            $this->logger->error('Ошибка отправки в Telegram, добавлено в очередь', [
+                                'id' => $item->id,
+                                'error' => $sendResult->error,
+                            ]);
+                        } else {
+                            $io->error("Не удалось отправить ID {$item->id}: " . ($sendResult->error ?? ''));
+                            $this->logger->error('Постоянная ошибка отправки в Telegram', [
+                                'id' => $item->id,
+                                'error' => $sendResult->error,
+                            ]);
+                        }
                     }
 
                     if ($limit > 0 && $processed >= $limit) {
                         $io->text("Достигнут лимит обработанных объявлений ($limit)");
-                        $this->logger->info("Достигнут лимит обработанных", ['limit' => $limit]);
-                        break 2; // выход из двух циклов (foreach и do-while)
+                        $this->logger->info('Достигнут лимит обработанных', ['limit' => $limit]);
+                        break 2;
                     }
-
-                    // Небольшая задержка между обработкой элементов, чтобы не перегружать API/Telegram
-                    // (закомментировано, т.к. мы уже делаем sleep после отправки)
                 }
 
                 $page++;
             } catch (\Throwable $e) {
                 $io->error("Ошибка на странице $page: " . $e->getMessage());
-                $this->logger->error("Ошибка на странице", ['page' => $page, 'exception' => $e->getMessage()]);
+                $this->logger->error('Ошибка на странице', [
+                    'page' => $page,
+                    'exception' => $e->getMessage(),
+                ]);
+
                 return Command::FAILURE;
             }
         } while ($page <= $totalPages);
 
+        $remaining = $this->outbox->count($source);
+
         $io->success(sprintf(
-            "Обработано %d, отправлено %d (новых: %d, изменений: %d), пропущено: %d",
+            'Обработано %d, отправлено %d (новых: %d, изменений: %d), из очереди: %d, в очередь: %d, пропущено: %d, осталось в очереди: %d',
             $processed,
             $sent,
             $newCount,
             $changedCount,
-            $skippedCount
+            $retriedCount,
+            $queuedCount,
+            $skippedCount,
+            $remaining
         ));
-        $this->logger->info("Парсинг завершён", [
+        $this->logger->info('Парсинг завершён', [
             'processed' => $processed,
             'sent' => $sent,
             'new' => $newCount,
             'changed' => $changedCount,
+            'retried' => $retriedCount,
+            'queued' => $queuedCount,
             'skipped' => $skippedCount,
+            'remaining' => $remaining,
         ]);
 
         return Command::SUCCESS;
+    }
+
+    /**
+     * @param array<string, true> $sentKeys
+     */
+    private function drainOutbox(
+        string $source,
+        TelegramSenderInterface $sender,
+        SymfonyStyle $io,
+        array &$sentKeys
+    ): int {
+        $entries = $this->outbox->due($source);
+        if ($entries === []) {
+            return 0;
+        }
+
+        $io->section('Очередь Telegram');
+        $sent = 0;
+
+        foreach ($entries as $entry) {
+            $item = $entry->item;
+            $sendResult = $sender->sendItem($item);
+
+            if ($sendResult->success) {
+                $this->outbox->remove($item->id, $item->source);
+                $sentKeys[$this->itemKey($item->source, $item->id)] = true;
+                $sent++;
+                $io->writeln("  ✅ Из очереди отправлено {$item->title}");
+                $this->logger->info('Элемент из очереди отправлен', ['id' => $item->id]);
+                sleep($this->sleepInterval);
+            } else {
+                $this->outbox->markFailed(
+                    $entry,
+                    $sendResult->error ?? 'Неизвестная ошибка',
+                    $sendResult->retryAfter
+                );
+                $io->error("Не удалось отправить из очереди ID {$item->id}");
+                $this->logger->error('Не удалось отправить элемент из очереди', [
+                    'id' => $item->id,
+                    'error' => $sendResult->error,
+                ]);
+            }
+        }
+
+        return $sent;
+    }
+
+    private function itemKey(string $source, string $id): string
+    {
+        return $source . ':' . $id;
     }
 }

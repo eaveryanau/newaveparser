@@ -19,6 +19,8 @@ services:
     App\:
         resource: '../src/'
 
+    App\Service\RunLockInterface: '@App\Service\RunLock'
+
     # add more service definitions when explicit configuration is needed
     # please note that last definitions always *replace* previous ones
   # Явные определения для клиентов
@@ -122,5 +124,7 @@ services:
         $itemNormalizers: !tagged_iterator app.item_normalizer
         $telegramSenders: !tagged_iterator app.telegram_sender
         $saver: '@App\Service\ItemSaver'
+        $outbox: '@App\Telegram\TelegramOutbox'
+        $runLock: '@App\Service\RunLock'
         $sleepInterval: '%env(int:SLEEP_INTERVAL)%'
         $logger: '@logger'

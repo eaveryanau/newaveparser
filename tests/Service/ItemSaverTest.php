@@ -126,4 +126,91 @@ class ItemSaverTest extends TestCase
         self::assertTrue($result['isPriceChanged']);
         self::assertSame(3000.0, $result['oldPrice']);
     }
+
+    public function testAvbyPriceIncreaseAtThresholdDoesNotNotifyButUpdatesPrice(): void
+    {
+        $this->insertItem('4', 'avby', 5000.0);
+
+        $result = $this->saver->save($this->item('4', 'avby', 5100.0));
+
+        self::assertFalse($result['isPriceChanged']);
+        self::assertSame(5100.0, $this->storedPrice('4', 'avby'));
+    }
+
+    public function testAvbyPriceIncreaseAboveThresholdNotifies(): void
+    {
+        $this->insertItem('5', 'avby', 5000.0);
+
+        $result = $this->saver->save($this->item('5', 'avby', 5100.01));
+
+        self::assertTrue($result['isPriceChanged']);
+    }
+
+    public function testAvbyPriceDecreaseAtThresholdDoesNotNotify(): void
+    {
+        $this->insertItem('6', 'avby', 5000.0);
+
+        $result = $this->saver->save($this->item('6', 'avby', 4900.0));
+
+        self::assertFalse($result['isPriceChanged']);
+    }
+
+    public function testAvbyPriceDecreaseAboveThresholdNotifies(): void
+    {
+        $this->insertItem('7', 'avby', 5000.0);
+
+        $result = $this->saver->save($this->item('7', 'avby', 4899.99));
+
+        self::assertTrue($result['isPriceChanged']);
+    }
+
+    public function testHhSmallPriceChangeStillNotifies(): void
+    {
+        $this->insertItem('8', 'hh', 3000.0);
+
+        $result = $this->saver->save($this->item('8', 'hh', 3000.01));
+
+        self::assertTrue($result['isPriceChanged']);
+    }
+
+    private function insertItem(string $id, string $source, float $price): void
+    {
+        $stmt = $this->pdo->prepare(
+            'INSERT INTO items
+                (id, source, title, description, price, currency, url, image_url, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        );
+        $stmt->execute([
+            $id,
+            $source,
+            'Old title',
+            '',
+            $price,
+            'USD',
+            "https://example.com/$id",
+            null,
+            '2024-01-01 00:00:00',
+        ]);
+    }
+
+    private function item(string $id, string $source, float $price): DTOItem
+    {
+        $item = new DTOItem();
+        $item->id = $id;
+        $item->source = $source;
+        $item->title = 'Updated title';
+        $item->price = $price;
+        $item->currency = 'USD';
+        $item->url = "https://example.com/$id";
+
+        return $item;
+    }
+
+    private function storedPrice(string $id, string $source): float
+    {
+        $stmt = $this->pdo->prepare('SELECT price FROM items WHERE id = ? AND source = ?');
+        $stmt->execute([$id, $source]);
+
+        return (float) $stmt->fetchColumn();
+    }
 }

@@ -7,6 +7,10 @@ use App\Command\ParseCommand;
 use App\DTO\Item;
 use App\Normalizer\ItemNormalizerInterface;
 use App\Service\ItemSaver;
+use App\Service\RunLockInterface;
+use App\Telegram\SendResult;
+use App\Telegram\TelegramOutbox;
+use App\Tests\Support\FakeRunLock;
 use App\Tests\Support\InMemoryDatabase;
 use App\Tests\Support\RecordingSender;
 use PHPUnit\Framework\TestCase;
@@ -18,7 +22,7 @@ class ParseCommandTest extends TestCase
 {
     public function testUnknownSourceFails(): void
     {
-        $tester = $this->createTester([], new RecordingSender('test'));
+        [$tester] = $this->createTester([], new RecordingSender('test'));
 
         $status = $tester->execute(['--source' => 'missing']);
 
@@ -28,7 +32,7 @@ class ParseCommandTest extends TestCase
 
     public function testMissingSenderFailsAtRuntime(): void
     {
-        $tester = $this->createTester([], new RecordingSender('another-source'));
+        [$tester] = $this->createTester([], new RecordingSender('another-source'));
 
         $status = $tester->execute(['--source' => 'test']);
 
@@ -36,13 +40,11 @@ class ParseCommandTest extends TestCase
         self::assertStringContainsString('Нет отправителя', $tester->getDisplay());
     }
 
-    public function testNoTgSavesWithoutSending(): void
+    public function testNoTgSavesWithoutSendingAndDoesNotRequireSender(): void
     {
-        $database = new InMemoryDatabase();
-        $saver = new ItemSaver($database, new NullLogger());
-        $sender = new RecordingSender('test');
+        $sender = new RecordingSender('another-source');
 
-        $tester = $this->createTester($this->pages(1), $sender, $saver);
+        [$tester, $database] = $this->createTester($this->pages(1), $sender);
         $status = $tester->execute(['--source' => 'test', '--no-tg' => true]);
 
         self::assertSame(Command::SUCCESS, $status);
@@ -52,11 +54,8 @@ class ParseCommandTest extends TestCase
 
     public function testLimitStopsProcessing(): void
     {
-        $database = new InMemoryDatabase();
-        $saver = new ItemSaver($database, new NullLogger());
-        $pages = $this->pages(3);
+        [$tester, $database] = $this->createTester($this->pages(3), new RecordingSender('test'));
 
-        $tester = $this->createTester($pages, new RecordingSender('test'), $saver);
         $status = $tester->execute(['--source' => 'test', '--limit' => 2, '--no-tg' => true]);
 
         self::assertSame(Command::SUCCESS, $status);
@@ -68,7 +67,7 @@ class ParseCommandTest extends TestCase
     {
         $sender = new RecordingSender('test');
 
-        $tester = $this->createTester($this->pages(1), $sender);
+        [$tester] = $this->createTester($this->pages(1), $sender);
         $status = $tester->execute(['--source' => 'test']);
 
         self::assertSame(Command::SUCCESS, $status);
@@ -82,10 +81,9 @@ class ParseCommandTest extends TestCase
         $saver = new ItemSaver($database, new NullLogger());
         $sender = new RecordingSender('test');
 
-        $existing = $this->item('1');
-        $saver->save($existing);
+        $saver->save($this->item('1'));
 
-        $tester = $this->createTester($this->pages(1), $sender, $saver);
+        [$tester] = $this->createTester($this->pages(1), $sender, $database);
         $status = $tester->execute(['--source' => 'test', '--force' => true]);
 
         self::assertSame(Command::SUCCESS, $status);
@@ -100,20 +98,120 @@ class ParseCommandTest extends TestCase
 
         $saver->save($this->item('1'));
 
-        $tester = $this->createTester($this->pages(1), $sender, $saver);
+        [$tester] = $this->createTester($this->pages(1), $sender, $database);
         $status = $tester->execute(['--source' => 'test']);
 
         self::assertSame(Command::SUCCESS, $status);
         self::assertCount(0, $sender->sent);
     }
 
+    public function testRetryableSendFailureIsQueued(): void
+    {
+        $sender = new RecordingSender('test');
+        $sender->queueResult(SendResult::retryable('network error'));
+
+        [$tester, $database, $outbox] = $this->createTester($this->pages(1), $sender);
+        $status = $tester->execute(['--source' => 'test']);
+
+        self::assertSame(Command::SUCCESS, $status);
+        self::assertCount(1, $sender->sent);
+        self::assertSame(1, $this->countItems($database));
+        self::assertSame(1, $outbox->count('test'));
+        self::assertStringContainsString('добавлено в очередь', $tester->getDisplay());
+    }
+
+    public function testPermanentSendFailureIsNotQueued(): void
+    {
+        $sender = new RecordingSender('test');
+        $sender->queueResult(SendResult::permanent('bad request'));
+
+        [$tester, , $outbox] = $this->createTester($this->pages(1), $sender);
+        $status = $tester->execute(['--source' => 'test']);
+
+        self::assertSame(Command::SUCCESS, $status);
+        self::assertCount(1, $sender->sent);
+        self::assertSame(0, $outbox->count('test'));
+    }
+
+    public function testDueOutboxItemIsRetriedOnNextRun(): void
+    {
+        $database = new InMemoryDatabase();
+        $outbox = new TelegramOutbox($database, new NullLogger());
+        $outbox->recordFailure($this->item('1'), 'network error');
+        $database->getPdo()->exec("UPDATE telegram_outbox SET next_attempt_at = '2000-01-01 00:00:00'");
+
+        $sender = new RecordingSender('test');
+
+        [$tester] = $this->createTester([], $sender, $database);
+        $status = $tester->execute(['--source' => 'test']);
+
+        self::assertSame(Command::SUCCESS, $status);
+        self::assertCount(1, $sender->sent);
+        self::assertSame('1', $sender->sent[0]->id);
+        self::assertSame(0, $outbox->count('test'));
+        self::assertStringContainsString('Из очереди отправлено', $tester->getDisplay());
+    }
+
+    public function testNoTgDoesNotDrainOutbox(): void
+    {
+        $database = new InMemoryDatabase();
+        $outbox = new TelegramOutbox($database, new NullLogger());
+        $outbox->recordFailure($this->item('1'), 'network error');
+        $database->getPdo()->exec("UPDATE telegram_outbox SET next_attempt_at = '2000-01-01 00:00:00'");
+
+        $sender = new RecordingSender('test');
+
+        [$tester] = $this->createTester([], $sender, $database);
+        $status = $tester->execute(['--source' => 'test', '--no-tg' => true]);
+
+        self::assertSame(Command::SUCCESS, $status);
+        self::assertCount(0, $sender->sent);
+        self::assertSame(1, $outbox->count('test'));
+    }
+
+    public function testForceDoesNotDuplicateItemSentFromOutbox(): void
+    {
+        $database = new InMemoryDatabase();
+        $outbox = new TelegramOutbox($database, new NullLogger());
+        $outbox->recordFailure($this->item('1'), 'network error');
+        $database->getPdo()->exec("UPDATE telegram_outbox SET next_attempt_at = '2000-01-01 00:00:00'");
+
+        $sender = new RecordingSender('test');
+
+        [$tester] = $this->createTester($this->pages(1), $sender, $database);
+        $status = $tester->execute(['--source' => 'test', '--force' => true]);
+
+        self::assertSame(Command::SUCCESS, $status);
+        self::assertCount(1, $sender->sent);
+        self::assertSame(0, $outbox->count('test'));
+        self::assertStringContainsString('Уже отправлено из очереди', $tester->getDisplay());
+    }
+
+    public function testBusyLockSkipsRun(): void
+    {
+        $sender = new RecordingSender('test');
+
+        [$tester] = $this->createTester([], $sender, null, new FakeRunLock(false));
+        $status = $tester->execute(['--source' => 'test']);
+
+        self::assertSame(Command::SUCCESS, $status);
+        self::assertCount(0, $sender->sent);
+        self::assertStringContainsString('уже выполняется', $tester->getDisplay());
+    }
+
+    /**
+     * @return array{0: CommandTester, 1: InMemoryDatabase, 2: TelegramOutbox}
+     */
     private function createTester(
         array $pages,
         RecordingSender $sender,
-        ?ItemSaver $saver = null,
+        ?InMemoryDatabase $database = null,
+        ?RunLockInterface $runLock = null,
         string $source = 'test'
-    ): CommandTester {
-        $saver ??= new ItemSaver(new InMemoryDatabase(), new NullLogger());
+    ): array {
+        $database ??= new InMemoryDatabase();
+        $saver = new ItemSaver($database, new NullLogger());
+        $outbox = new TelegramOutbox($database, new NullLogger());
 
         $client = new class($pages, $source) implements ApiClientInterface {
             public function __construct(private array $pages, private string $source)
@@ -155,14 +253,18 @@ class ParseCommandTest extends TestCase
             }
         };
 
-        return new CommandTester(new ParseCommand(
+        $tester = new CommandTester(new ParseCommand(
             [$client],
             [$normalizer],
             [$sender],
             $saver,
+            $outbox,
+            $runLock ?? new FakeRunLock(),
             0,
             new NullLogger()
         ));
+
+        return [$tester, $database, $outbox];
     }
 
     private function item(string $id): Item
