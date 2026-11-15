@@ -23,14 +23,5 @@ jobs:
       - name: Install dependencies
         run: composer install --no-progress --prefer-dist
 
-      - name: Smoke test — Symfony starts
-        run: php bin/console list
-
-      - name: Check config is valid
-        run: php bin/console debug:config framework
-
-      - name: Run PHPStan
-        run: vendor/bin/phpstan analyse --level=5 src/
-
-      - name: Run tests
-        run: vendor/bin/phpunit
+      - name: Validate, smoke test, static analysis and tests
+        run: composer check

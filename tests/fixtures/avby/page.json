@@ -1,0 +1,35 @@
+{
+    "count": 2,
+    "pageCount": 1,
+    "adverts": [
+        {
+            "id": 12345,
+            "properties": [
+                {"name": "brand", "value": "BMW"},
+                {"name": "model", "value": "X5"},
+                {"name": "year", "value": "2020"},
+                {"name": "generation", "value": "G05"},
+                {"name": "generation_with_years", "value": "G05 (2018-)"},
+                {"name": "engine_capacity", "value": "3.0"},
+                {"name": "engine_type", "value": "Дизель"},
+                {"name": "transmission_type", "value": "Автомат"}
+            ],
+            "price": {"usd": {"amount": 35000}},
+            "publicUrl": "https://cars.av.by/bmw-x5/12345",
+            "description": "Отличное состояние",
+            "photos": [
+                {"medium": {"url": "https://img.av.by/medium.jpg"}}
+            ]
+        },
+        {
+            "id": 67890,
+            "properties": [
+                {"name": "brand", "value": "Audi"},
+                {"name": "model", "value": "A4"},
+                {"name": "year", "value": "2018"}
+            ],
+            "price": {"usd": {"amount": 15000}},
+            "publicUrl": "https://cars.av.by/audi-a4/67890"
+        }
+    ]
+}

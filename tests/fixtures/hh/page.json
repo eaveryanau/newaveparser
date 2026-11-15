@@ -1,0 +1,30 @@
+{
+    "vacancySearchResult": {
+        "totalResults": 120,
+        "vacancies": [
+            {
+                "vacancyId": 98765,
+                "name": "PHP Developer",
+                "company": {
+                    "name": "Tech Corp",
+                    "logos": {
+                        "logo": [
+                            {"@type": "medium", "@url": "/logos/logo.png"}
+                        ]
+                    }
+                },
+                "compensation": {
+                    "from": 3000,
+                    "to": 5000,
+                    "currencyCode": "USD"
+                },
+                "area": {"name": "Минск"},
+                "workExperience": "between1And3",
+                "workFormats": [
+                    {"workFormatsElement": ["REMOTE"]}
+                ],
+                "links": {"desktop": "https://hh.ru/vacancy/98765"}
+            }
+        ]
+    }
+}

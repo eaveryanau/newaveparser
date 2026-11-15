@@ -12,7 +12,7 @@
 |---|---|
 | Парсинг av.by (автомобили) | ✅ Работает |
 | Парсинг hh.ru (вакансии) | ✅ Работает |
-| Заглушка для нового источника (`another`) | ✅ Готовый шаблон |
+| Заглушка для нового источника (`another`) | ✅ Шаблон (sender не настроен) |
 | Сохранение в SQLite | ✅ PDO, автосоздание таблицы |
 | Выявление новых объявлений | ✅ По составному ключу `(id, source)` |
 | Выявление изменения цены | ✅ С погрешностью 0.001 |
@@ -110,10 +110,7 @@ chmod 755 var
 # ─── Telegram ────────────────────────────────────────────────
 TELEGRAM_TOKEN=1234567890:ABCdefGHIjklmNOPqrstUVwxyz
 
-# Общий fallback (используется если не указаны отдельные)
-TELEGRAM_CHAT_ID=@channel_or_id
-
-# Отдельные каналы под каждый источник
+# Отдельные каналы под каждый источник (fallback TELEGRAM_CHAT_ID не используется)
 TELEGRAM_CHAT_ID_AV=@cars_channel
 TELEGRAM_CHAT_ID_HH=@jobs_channel
 
@@ -126,8 +123,9 @@ DATABASE_URL=sqlite:var/data.db
 
 # ─── Настройки выполнения ────────────────────────────────────
 SLEEP_INTERVAL=2    # секунд между отправками в Telegram
-LOG_LEVEL=info      # debug / info / error
 ```
+
+Уровни логирования заданы в `config/packages/monolog.yaml`; переменная `LOG_LEVEL` не читается.
 
 ---
 
@@ -147,6 +145,9 @@ php bin/console parse [options]
 | `--force` | `-f` | — | Отправить все объявления, игнорируя проверку на новизну |
 | `--no-tg` | — | — | Только сохранение в БД, без отправки в Telegram |
 
+`another` — это заготовка: для него зарегистрированы клиент и нормализатор, но нет
+`telegram.sender.another`, поэтому `--source=another` завершится ошибкой «Нет отправителя».
+
 ### Примеры
 
 ```bash
@@ -164,6 +165,16 @@ php bin/console parse --source=hh --force
 
 # Полный цикл: 10 страниц, 100 объявлений, av.by
 php bin/console parse -s avby -p 10 -l 100
+```
+
+### Проверка изменений
+
+```bash
+# Полная проверка: composer validate + smoke + config + PHPStan + PHPUnit
+composer check
+
+# Ручная проверка парсера: пишет в отдельную SQLite, в Telegram не отправляет
+DATABASE_URL=sqlite:/tmp/newaveparser-check.db php bin/console parse --source=avby --pages=1 --no-tg
 ```
 
 ### Запуск по расписанию (cron)
@@ -349,7 +360,7 @@ php bin/console parse --source=realtby --pages=3
 Возможные направления:
 
 - **Новые источники**: kufar.by, onliner.by, rabota.by, realt.by
-- **Тесты**: PHPUnit (неймспейс `App\Tests\` уже зарегистрирован в composer.json)
+- **Тесты**: PHPUnit (нормализаторы, `ItemSaver`, клиенты на HTTP-моках, `ParseCommand`)
 - **Веб-интерфейс**: Symfony/Twig для просмотра сохранённых объявлений
 - **История цен**: хранить не только последнюю цену, а всю историю изменений
 - **Экспорт**: CSV / JSON / XLSX из собранных данных

@@ -9,7 +9,7 @@ class Database
     public function __construct(string $databaseUrl)
     {
         $path = str_replace('sqlite:', '', $databaseUrl);
-        if ($path && $path[0] !== '/') {
+        if ($path !== ':memory:' && $path !== '' && $path[0] !== '/') {
             $path = __DIR__ . '/../../' . $path;
         }
         $this->pdo = new \PDO('sqlite:' . $path);
